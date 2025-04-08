@@ -1,0 +1,114 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  azureSubscription: 'YourAzureSubscriptionName' # Replace with your subscription name
+  frontendAppName: 'todo-frontend'
+  backendAppName: 'todo-backend'
+  acrName: 'todoappregistry' # Replace with your Azure Container Registry name
+  frontendDockerfilePath: 'frontend/Dockerfile'
+  backendDockerfilePath: 'backend/Dockerfile'
+  frontendImageName: '$(frontendAppName)'
+  backendImageName: '$(backendAppName)'
+  acrHostName: '$(acrName).azurecr.io'
+  frontendTag: '$(Build.BuildId)'
+  backendTag: '$(Build.BuildId)'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: BuildAndTest
+    displayName: 'Build and Test'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '18.x'
+      displayName: 'Install Node.js'
+
+    - script: |
+        npm run install-all
+      displayName: 'Install dependencies'
+
+    - script: |
+        cd frontend && npm run lint
+      displayName: 'Lint Frontend'
+
+    - script: |
+        cd backend && npm run lint
+      displayName: 'Lint Backend'
+
+    - script: |
+        npm test
+      displayName: 'Run tests'
+      continueOnError: true
+
+    - script: |
+        cd frontend && npm run build
+      displayName: 'Build frontend'
+
+    - task: Docker@2
+      displayName: 'Build and push frontend image'
+      inputs:
+        command: buildAndPush
+        containerRegistry: '$(acrName)'
+        repository: '$(frontendImageName)'
+        dockerfile: '$(frontendDockerfilePath)'
+        tags: |
+          $(frontendTag)
+          latest
+
+    - task: Docker@2
+      displayName: 'Build and push backend image'
+      inputs:
+        command: buildAndPush
+        containerRegistry: '$(acrName)'
+        repository: '$(backendImageName)'
+        dockerfile: '$(backendDockerfilePath)'
+        tags: |
+          $(backendTag)
+          latest
+
+- stage: Deploy
+  displayName: 'Deploy'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: DeployToDev
+    displayName: 'Deploy to Dev'
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Deploy to Azure Container Apps'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          # Login to Azure Container Registry
+          az acr login --name $(acrName)
+          
+          # Update frontend container app
+          az containerapp update \
+            --name $(frontendAppName) \
+            --resource-group YourResourceGroup \
+            --image $(acrHostName)/$(frontendImageName):$(frontendTag)
+          
+          # Update backend container app
+          az containerapp update \
+            --name $(backendAppName) \
+            --resource-group YourResourceGroup \
+            --image $(acrHostName)/$(backendImageName):$(backendTag)
+
+    - task: AzureCLI@2
+      displayName: 'Run database migrations'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          # Run any database migrations if needed
+          echo "Running database migrations if needed"
+          # Add your migration commands here
